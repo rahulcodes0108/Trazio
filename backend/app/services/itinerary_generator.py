@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from datetime import time
+from app.services.crowd_baseline import estimate_crowd_baseline
 from sqlalchemy.orm import Session
 
 from app.models.destination import Destination
@@ -109,6 +111,55 @@ def _budget_amount(trip: Trip) -> float | None:
 
     return max(0.0, float(trip.budget_amount))
 
+DEFAULT_CROWD_VISIT_TIME = time(9, 0)
+CROWD_PENALTY_WEIGHT = 0.10
+
+
+def _crowd_visit_time(trip: Trip) -> time:
+    """Return the planning-time used for the MVP crowd baseline."""
+
+    if trip.start_time is not None:
+        return trip.start_time
+
+    return DEFAULT_CROWD_VISIT_TIME
+
+
+def apply_crowd_score(
+    destination_score,
+    trip: Trip,
+    weather_score: float | None = None,
+):
+    """Apply deterministic crowd pressure as a soft ranking penalty."""
+
+    visit_time = _crowd_visit_time(trip)
+
+    crowd = estimate_crowd_baseline(
+        destination=destination_score.destination,
+        visit_date=trip.start_date,
+        visit_time=visit_time,
+        weather_score=weather_score,
+    )
+
+    penalty = crowd.score * CROWD_PENALTY_WEIGHT
+
+    total = max(
+        0.0,
+        destination_score.total_score - penalty,
+    )
+
+    explanation = destination_score.explanation.rstrip(".")
+
+    explanation = (
+        f"{explanation}; "
+        f"{crowd.explanation}."
+    )
+
+    return replace(
+        destination_score,
+        total_score=round(total, 2),
+        explanation=explanation,
+    )
+
 
 def _rank_personalized_candidates(
     db: Session,
@@ -125,10 +176,10 @@ def _rank_personalized_candidates(
         Hybrid personalization.
 
     Phase 7:
-        Weather suitability scoring.
+        Weather suitability and crowd intelligence.
 
     Final ranking:
-        Baseline + personalization + weather context.
+        Baseline + personalization + weather + crowd context.
 
     Weather is a soft signal only. If weather data is unavailable,
     the destination keeps its previous score.
@@ -209,6 +260,20 @@ def _rank_personalized_candidates(
                         destination_score=personalized_score_result,
                         weather_context=weather_context,
                     )
+                # -------------------------------------------------
+                # Phase 7B: Crowd intelligence
+                # -------------------------------------------------
+
+                weather_score = None
+
+                if weather_context is not None:
+                    weather_score = weather_context.suitability.score
+
+                personalized_score_result = apply_crowd_score(
+                    destination_score=personalized_score_result,
+                    trip=trip,
+                    weather_score=weather_score,
+                )
 
                 personalized_ranked.append(
                     personalized_score_result
@@ -242,7 +307,7 @@ def generate_itinerary(
     2. Filter hard-eligible destinations.
     3. Build the user's personalization profile.
     4. Apply hybrid destination scoring.
-    5. Apply weather suitability scoring.
+    5. Apply weather suitability and crowd intelligence.
     6. Limit the candidate pool to Mapbox's coordinate limit.
     7. Geocode the trip starting location.
     8. Build a Mapbox travel-time/distance matrix.
