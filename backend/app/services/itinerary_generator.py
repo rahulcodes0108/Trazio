@@ -390,151 +390,49 @@ def _build_generation_pipeline(
     return ranked_candidates, candidate_coordinates
 
 
-def _rank_personalized_candidates(
-    db: Session,
+def _execute_itinerary_planning(
+    ranked_candidates: list[DestinationScore],
+    candidate_coordinates: list[tuple[float, float]],
     trip: Trip,
-    candidates: list[Destination],
-) -> list:
+    start_coordinates: tuple[float, float],
+) -> tuple[
+    list[tuple[Destination, int, int, float, str]],
+    int,
+    int,
+    float,
+]:
     """
-    Rank destinations using:
+    Execute the shared itinerary planning execution path.
 
-    Phase 5:
-        Baseline destination scoring.
+    This function implements the reusable core execution logic that can be called
+    by both normal itinerary generation and future dynamic replanning.
 
-    Phase 6:
-        Hybrid personalization.
+    Steps performed:
+    1. Mapbox travel-time/distance matrix
+    2. OR-Tools optimize_itinerary()
+    3. Extract selected destinations
+    4. Mapbox Directions verification
+    5. Final time validation
+    6. Final budget validation
+    7. Produce selected destination/route information for persistence
 
-    Phase 7:
-        Weather suitability and crowd intelligence.
+    Args:
+        ranked_candidates: Ranked list of destination scores (limited to Mapbox max)
+        candidate_coordinates: List of coordinates (start + candidates)
+        trip: Trip context for constraints and preferences
+        start_coordinates: Starting point coordinates
 
-    Final ranking:
-        Baseline + personalization + weather + crowd context.
+    Returns:
+        Tuple containing:
+        - selected: List of (destination, travel_duration, visit_duration, distance_km, selection_reason)
+        - total_duration: Total itinerary duration in minutes
+        - total_travel_duration: Total travel duration in minutes
+        - total_cost: Total estimated cost
 
-    Weather is a soft signal only. If weather data is unavailable,
-    the destination keeps its previous score.
-
-    NOTE: This function now delegates to _rank_candidates_with_intelligence
-    for the actual ranking logic, ensuring that weather and crowd intelligence
-    are applied regardless of personalization availability.
+    Raises:
+        ItineraryGenerationError: If planning fails at any step
     """
-
-    # Build user profile if available
-    user_profile = None
-    if trip.user_id is not None:
-        user = db.get(User, trip.user_id)
-        if user is not None:
-            user_profile = build_user_profile(db, user)
-
-    # Use the new reusable ranking function
-    return _rank_candidates_with_intelligence(
-        db=db,
-        trip=trip,
-        candidates=candidates,
-        user_profile=user_profile,
-    )
-
-def generate_itinerary(
-    db: Session,
-    trip: Trip,
-    destinations: list[Destination],
-) -> Itinerary:
-    """
-    Generate and persist a personalized, constraint-aware itinerary.
-
-    Pipeline:
-
-    1. Validate the trip.
-    2. Filter hard-eligible destinations.
-    3. Build the user's personalization profile.
-    4. Apply hybrid destination scoring.
-    5. Apply weather suitability and crowd intelligence.
-    6. Limit the candidate pool to Mapbox's coordinate limit.
-    7. Geocode the trip starting location.
-    8. Build a Mapbox travel-time/distance matrix.
-    9. Optimize destination selection and ordering with OR-Tools.
-    10. Verify the optimized route using Mapbox Directions.
-    11. Validate final time and cost constraints.
-    12. Persist the itinerary and stops.
-    """
-
-    if not trip.is_ready_for_planning:
-        raise ItineraryGenerationError(
-            "Trip is not ready for itinerary generation."
-        )
-
-    # ---------------------------------------------------------
-    # 1. Filter candidate destinations
-    # ---------------------------------------------------------
-
-    candidates = _filter_candidates(
-        destinations,
-        trip,
-    )
-
-    if not candidates:
-        raise ItineraryGenerationError(
-            "No destinations match the trip requirements."
-        )
-
-    # ---------------------------------------------------------
-    # 2. Geocode starting location
-    # ---------------------------------------------------------
-
-    try:
-        start_coordinates = geocode_location(
-            trip.start_location,
-        )
-    except MapboxServiceError as exc:
-        raise ItineraryGenerationError(
-            f"Unable to locate trip starting point "
-            f"'{trip.start_location}'."
-        ) from exc
-
-    # ---------------------------------------------------------
-    # 3. Personalized destination ranking
-    # ---------------------------------------------------------
-
-    ranked_candidates = _rank_personalized_candidates(
-        db=db,
-        trip=trip,
-        candidates=candidates,
-    )
-
-    # Mapbox allows at most 25 coordinates.
-    # One coordinate is the starting location.
-    ranked_candidates = ranked_candidates[
-        :MAX_MAPBOX_DESTINATIONS
-    ]
-
-    if not ranked_candidates:
-        raise ItineraryGenerationError(
-            "No destinations are available for route planning."
-        )
-
-    # ---------------------------------------------------------
-    # 4. Build coordinate sequence
-    # ---------------------------------------------------------
-
-    candidate_coordinates: list[tuple[float, float]] = [
-        start_coordinates,
-    ]
-
-    for scored_destination in ranked_candidates:
-        candidate_coordinates.append(
-            get_coordinates(
-                scored_destination.destination,
-            )
-        )
-
-    if len(candidate_coordinates) > 25:
-        raise ItineraryGenerationError(
-            "Too many coordinates for Mapbox routing."
-        )
-
-    # ---------------------------------------------------------
-    # 5. Get Mapbox travel matrix
-    # ---------------------------------------------------------
-
+    # Step 1: Mapbox travel-time/distance matrix
     transport_mode = _transport_mode_value(trip)
 
     try:
@@ -547,10 +445,7 @@ def generate_itinerary(
             "Unable to calculate travel times using Mapbox."
         ) from exc
 
-    # ---------------------------------------------------------
-    # 6. Prepare optimizer inputs
-    # ---------------------------------------------------------
-
+    # Step 2: Prepare optimizer inputs
     visit_durations = [
         _visit_duration(
             scored_destination.destination,
@@ -577,10 +472,7 @@ def generate_itinerary(
 
     budget_amount = _budget_amount(trip)
 
-    # ---------------------------------------------------------
-    # 7. OR-Tools optimization
-    # ---------------------------------------------------------
-
+    # Step 3: OR-Tools optimization
     optimization_result = optimize_itinerary(
         candidates=ranked_candidates,
         travel_minutes=travel_matrix,
@@ -602,10 +494,7 @@ def generate_itinerary(
         for stop in optimization_result.stops
     ]
 
-    # ---------------------------------------------------------
-    # 8. Verify optimized route with Mapbox Directions
-    # ---------------------------------------------------------
-
+    # Step 4: Verify optimized route with Mapbox Directions
     route_coordinates: list[tuple[float, float]] = [
         start_coordinates,
     ]
@@ -635,10 +524,7 @@ def generate_itinerary(
             "Mapbox returned incomplete route information."
         )
 
-    # ---------------------------------------------------------
-    # 9. Final constraint validation
-    # ---------------------------------------------------------
-
+    # Step 5-7: Final constraint validation and build selected list
     selected: list[
         tuple[Destination, int, int, float, str]
     ] = []
@@ -745,6 +631,166 @@ def generate_itinerary(
         raise ItineraryGenerationError(
             "Generated itinerary exceeds the trip budget."
         )
+
+    return selected, total_duration, total_travel_duration, total_cost
+
+
+def _rank_personalized_candidates(
+    db: Session,
+    trip: Trip,
+    candidates: list[Destination],
+) -> list:
+    """
+    Rank destinations using:
+
+    Phase 5:
+        Baseline destination scoring.
+
+    Phase 6:
+        Hybrid personalization.
+
+    Phase 7:
+        Weather suitability and crowd intelligence.
+
+    Final ranking:
+        Baseline + personalization + weather + crowd context.
+
+    Weather is a soft signal only. If weather data is unavailable,
+    the destination keeps its previous score.
+
+    NOTE: This function now delegates to _rank_candidates_with_intelligence
+    for the actual ranking logic, ensuring that weather and crowd intelligence
+    are applied regardless of personalization availability.
+    """
+
+    # Build user profile if available
+    user_profile = None
+    if trip.user_id is not None:
+        user = db.get(User, trip.user_id)
+        if user is not None:
+            user_profile = build_user_profile(db, user)
+
+    # Use the new reusable ranking function
+    return _rank_candidates_with_intelligence(
+        db=db,
+        trip=trip,
+        candidates=candidates,
+        user_profile=user_profile,
+    )
+
+def generate_itinerary(
+    db: Session,
+    trip: Trip,
+    destinations: list[Destination],
+) -> Itinerary:
+    """
+    Generate and persist a personalized, constraint-aware itinerary.
+
+    Pipeline:
+
+    1. Validate the trip.
+    2. Filter hard-eligible destinations.
+    3. Build the user's personalization profile.
+    4. Apply hybrid destination scoring.
+    5. Apply weather suitability and crowd intelligence.
+    6. Limit the candidate pool to Mapbox's coordinate limit.
+    7. Geocode the trip starting location.
+    8. Build candidate coordinates.
+    9. Execute shared planning pipeline (Mapbox matrix, OR-Tools optimization,
+       Mapbox Directions verification, final constraint validation).
+    10. Persist the itinerary and stops.
+
+    Note: Steps 8-9 use the reusable _execute_itinerary_planning() function
+    that can be shared with future dynamic replanning.
+    """
+
+    if not trip.is_ready_for_planning:
+        raise ItineraryGenerationError(
+            "Trip is not ready for itinerary generation."
+        )
+
+    # ---------------------------------------------------------
+    # 1. Filter candidate destinations
+    # ---------------------------------------------------------
+
+    candidates = _filter_candidates(
+        destinations,
+        trip,
+    )
+
+    if not candidates:
+        raise ItineraryGenerationError(
+            "No destinations match the trip requirements."
+        )
+
+    # ---------------------------------------------------------
+    # 2. Geocode starting location
+    # ---------------------------------------------------------
+
+    try:
+        start_coordinates = geocode_location(
+            trip.start_location,
+        )
+    except MapboxServiceError as exc:
+        raise ItineraryGenerationError(
+            f"Unable to locate trip starting point "
+            f"'{trip.start_location}'."
+        ) from exc
+
+    # ---------------------------------------------------------
+    # 3. Personalized destination ranking
+    # ---------------------------------------------------------
+
+    ranked_candidates = _rank_personalized_candidates(
+        db=db,
+        trip=trip,
+        candidates=candidates,
+    )
+
+    # Mapbox allows at most 25 coordinates.
+    # One coordinate is the starting location.
+    ranked_candidates = ranked_candidates[
+        :MAX_MAPBOX_DESTINATIONS
+    ]
+
+    if not ranked_candidates:
+        raise ItineraryGenerationError(
+            "No destinations are available for route planning."
+        )
+
+    # ---------------------------------------------------------
+    # 4. Build coordinate sequence
+    # ---------------------------------------------------------
+
+    candidate_coordinates: list[tuple[float, float]] = [
+        start_coordinates,
+    ]
+
+    for scored_destination in ranked_candidates:
+        candidate_coordinates.append(
+            get_coordinates(
+                scored_destination.destination,
+            )
+        )
+
+    if len(candidate_coordinates) > 25:
+        raise ItineraryGenerationError(
+            "Too many coordinates for Mapbox routing."
+        )
+
+    # ---------------------------------------------------------
+    # 5-9. Execute shared planning pipeline
+    # ---------------------------------------------------------
+
+    # Use the shared execution path for the core planning logic
+    selected, total_duration, total_travel_duration, total_cost = (
+        _execute_itinerary_planning(
+            ranked_candidates=ranked_candidates,
+            candidate_coordinates=candidate_coordinates,
+            trip=trip,
+            start_coordinates=start_coordinates,
+        )
+    )
 
     # ---------------------------------------------------------
     # 10. Create itinerary version
