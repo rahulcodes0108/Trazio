@@ -25,7 +25,7 @@ from app.repositories.user_repository import UserRepository
 # Test database setup
 # Use 'postgres' as host for Docker, 'localhost' for local development
 # Docker container name is 'trazio-postgres' but from host we use 'localhost'
-TEST_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@localhost:5432/trazio_test"
+TEST_DATABASE_URL = "postgresql+psycopg2://postgres:postgres@postgres:5432/trazio_test"
 
 # Create test engine and session factory
 engine = create_engine(TEST_DATABASE_URL, future=True)
@@ -53,7 +53,8 @@ def db_session(test_db):
     yield session
 
     session.close()
-    transaction.rollback()
+    if transaction.is_active:
+        transaction.rollback()
     connection.close()
 
 

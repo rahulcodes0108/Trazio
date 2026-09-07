@@ -7,7 +7,16 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from geoalchemy2 import Geometry
-from sqlalchemy import CheckConstraint, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum as SQLEnum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -83,11 +92,14 @@ class Destination(Base, TimestampMixin):
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[DestinationCategory] = mapped_column(
-        String(20),
-        nullable=False,
-        default=DestinationCategory.ATTRACTION,
+    SQLEnum(
+        DestinationCategory,
+        values_callable=lambda enum_class: [item.value for item in enum_class],
+        name="destinationcategory",
+        native_enum=True,),
+    nullable=False,
+    default=DestinationCategory.ATTRACTION,
     )
-
     # PostGIS Geometry: POINT(lon lat) in SRID 4326 (WGS84)
     location: Mapped[Geometry] = mapped_column(
         Geometry(geometry_type="POINT", srid=4326),
@@ -113,7 +125,12 @@ class Destination(Base, TimestampMixin):
 
     # Accessibility
     accessibility: Mapped[AccessibilityLevel] = mapped_column(
-        String(20),
+        SQLEnum(
+            AccessibilityLevel,
+            values_callable=lambda enum_class: [item.value for item in enum_class],
+            native_enum=True,
+            name="accessibilitylevel",
+        ),
         nullable=False,
         default=AccessibilityLevel.UNKNOWN,
     )

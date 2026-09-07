@@ -80,7 +80,7 @@ class ItineraryStop(Base, TimestampMixin):
     travel_mode: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     # Selection metadata
-    selection_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    selection_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Cost estimate for this stop

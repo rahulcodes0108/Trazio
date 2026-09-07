@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Enum as SQLEnum, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -64,9 +64,14 @@ class Itinerary(Base, TimestampMixin):
 
     # Status and metadata
     status: Mapped[ItineraryStatus] = mapped_column(
-        String(20),
-        nullable=False,
-        default=ItineraryStatus.DRAFT,
+    SQLEnum(
+        ItineraryStatus,
+        values_callable=lambda enum_class: [item.value for item in enum_class],
+        native_enum=False,
+        length=20,
+    ),
+    nullable=False,
+    default=ItineraryStatus.DRAFT,
     )
     notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

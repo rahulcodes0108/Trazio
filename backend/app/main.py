@@ -31,6 +31,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Include API routers
+from app.api.routers import auth_router, destinations_router, trips_router, itineraries_router
+
+# Include routers
+app.include_router(auth_router)
+app.include_router(destinations_router)
+app.include_router(trips_router)
+app.include_router(itineraries_router)
+
 
 @app.get("/health", response_model=dict)
 async def health_check():

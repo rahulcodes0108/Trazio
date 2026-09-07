@@ -59,3 +59,13 @@ class TripService:
     def get_trip_by_share_token(db: Session, share_token: str) -> Trip | None:
         """Get trip by share token."""
         return TripRepository.get_by_share_token(db=db, share_token=share_token)
+
+    @staticmethod
+    def update(db: Session, trip: Trip, **kwargs) -> Trip:
+        """Update trip attributes."""
+        return TripRepository.update(db=db, trip=trip, **kwargs)
+
+    @staticmethod
+    def delete(db: Session, trip: Trip) -> None:
+        """Delete a trip."""
+        TripRepository.delete(db=db, trip=trip)
