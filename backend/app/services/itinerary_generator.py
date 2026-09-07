@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 from datetime import time
+from typing import Any
 from app.services.crowd_baseline import estimate_crowd_baseline
+from app.services.personalization import PersonalizationProfile
 from sqlalchemy.orm import Session
 
 from app.models.destination import Destination
@@ -13,7 +15,7 @@ from app.models.itinerary import Itinerary, ItineraryStatus
 from app.models.itinerary_stop import ItineraryStop
 from app.models.trip import BudgetLevel, Trip, TripStatus
 from app.models.user import User
-from app.services.destination_scorer import rank_destinations
+from app.services.destination_scorer import DestinationScore, rank_destinations
 from app.services.itinerary_optimizer import optimize_itinerary
 from app.services.mapbox_service import (
     MapboxServiceError,
@@ -29,6 +31,7 @@ from app.services.personalization import (
 from app.services.weather_context import (
     apply_weather_score,
     get_destination_weather_context,
+    WeatherContext,
 )
 from app.services.route_optimizer import get_coordinates
 
@@ -149,9 +152,12 @@ def apply_crowd_score(
 
     explanation = destination_score.explanation.rstrip(".")
 
+    # Strip any trailing period from crowd explanation to avoid double punctuation
+    crowd_explanation = crowd.explanation.rstrip(".")
+
     explanation = (
         f"{explanation}; "
-        f"{crowd.explanation}."
+        f"{crowd_explanation}."
     )
 
     return replace(
@@ -159,6 +165,229 @@ def apply_crowd_score(
         total_score=round(total, 2),
         explanation=explanation,
     )
+
+
+def _apply_personalization(
+    scored_destination: DestinationScore,
+    destination: Destination,
+    trip: Trip,
+    profile: PersonalizationProfile,
+) -> DestinationScore:
+    """Apply personalization scoring to a destination score."""
+    personalization_score = hybrid_personalization_score(
+        destination,
+        trip,
+        profile,
+    )
+
+    personalized_score = round(
+        scored_destination.total_score * 0.65
+        + personalization_score * 0.35,
+        2,
+    )
+
+    personalization_reason = personalization_explanation(
+        destination,
+        trip,
+        profile,
+    )
+
+    if personalization_reason:
+        explanation = (
+            f"{scored_destination.explanation} "
+            f"{personalization_reason}"
+        )
+    else:
+        explanation = scored_destination.explanation
+
+    return replace(
+        scored_destination,
+        total_score=personalized_score,
+        explanation=explanation,
+    )
+
+
+def _apply_weather_and_crowd(
+    scored_destination: DestinationScore,
+    destination: Destination,
+    trip: Trip,
+    weather_context: WeatherContext | None = None,
+) -> DestinationScore:
+    """Apply weather and crowd intelligence to a destination score.
+
+    This function applies weather and crowd scoring independently of personalization,
+    allowing all trips to benefit from these intelligence signals.
+    """
+    result = scored_destination
+
+    # Apply weather intelligence if available
+    if weather_context is not None:
+        result = apply_weather_score(
+            destination_score=result,
+            weather_context=weather_context,
+        )
+
+    # Apply crowd intelligence
+    weather_score = None
+    if weather_context is not None:
+        weather_score = weather_context.suitability.score
+
+    result = apply_crowd_score(
+        destination_score=result,
+        trip=trip,
+        weather_score=weather_score,
+    )
+
+    return result
+
+
+def _rank_candidates_with_intelligence(
+    db: Session,
+    trip: Trip,
+    candidates: list[Destination],
+    user_profile: PersonalizationProfile | None = None,
+) -> list[DestinationScore]:
+    """
+    Rank destinations using the full intelligence pipeline.
+
+    This is the reusable core ranking function that applies:
+    1. Baseline destination scoring
+    2. Optional personalization (if user_profile provided)
+    3. Weather intelligence (independent of personalization)
+    4. Crowd intelligence (independent of personalization)
+
+    Args:
+        db: Database session (used for personalization profile building if needed)
+        trip: The trip context
+        candidates: Filtered list of eligible destinations
+        user_profile: Optional pre-built personalization profile
+
+    Returns:
+        Ranked list of DestinationScore objects
+    """
+    # Step 1: Baseline destination scoring
+    base_ranked = rank_destinations(
+        candidates,
+        trip,
+    )
+
+    # Step 2: Prepare weather contexts for all destinations
+    # This is done for all candidates regardless of personalization
+    weather_contexts = {}
+    for destination in candidates:
+        weather_context = get_destination_weather_context(
+            destination=destination,
+            forecast_date=trip.start_date,
+        )
+        weather_contexts[destination.id] = weather_context
+
+    ranked_with_intelligence = []
+
+    for scored_destination in base_ranked:
+        destination = scored_destination.destination
+        weather_context = weather_contexts.get(destination.id)
+
+        # Step 2: Apply personalization if profile is available
+        if user_profile is not None:
+            scored_destination = _apply_personalization(
+                scored_destination,
+                destination,
+                trip,
+                user_profile,
+            )
+
+        # Step 3: Apply weather and crowd intelligence (always applied)
+        scored_destination = _apply_weather_and_crowd(
+            scored_destination,
+            destination,
+            trip,
+            weather_context,
+        )
+
+        ranked_with_intelligence.append(scored_destination)
+
+    # Final ranking
+    ranked_with_intelligence.sort(
+        key=lambda item: (
+            -item.total_score,
+            -item.popularity_score,
+            item.destination.id,
+        )
+    )
+
+    return ranked_with_intelligence
+
+
+def _build_generation_pipeline(
+    db: Session,
+    trip: Trip,
+    candidates: list[Destination],
+    user_profile: PersonalizationProfile | None = None,
+    start_coordinates: tuple[float, float] | None = None,
+) -> tuple[list[DestinationScore], list[tuple[float, float]]]:
+    """
+    Build the reusable itinerary generation pipeline.
+
+    This function implements the shared pipeline steps that can be reused by both
+    normal itinerary generation and future dynamic replanning:
+
+    1. Filter hard-eligible destinations (done by caller)
+    2. Rank candidates with intelligence (baseline + personalization + weather + crowd)
+    3. Apply Mapbox coordinate limit
+    4. Build coordinate sequence with start location
+
+    Args:
+        db: Database session
+        trip: Trip context
+        candidates: Pre-filtered list of eligible destinations
+        user_profile: Optional pre-built personalization profile
+        start_coordinates: Optional pre-computed start coordinates
+
+    Returns:
+        Tuple of (ranked_candidates, candidate_coordinates)
+
+    Raises:
+        ItineraryGenerationError: If no candidates or too many coordinates
+    """
+    # Step 1: Rank candidates with full intelligence pipeline
+    ranked_candidates = _rank_candidates_with_intelligence(
+        db=db,
+        trip=trip,
+        candidates=candidates,
+        user_profile=user_profile,
+    )
+
+    # Step 2: Apply Mapbox coordinate limit
+    ranked_candidates = ranked_candidates[:MAX_MAPBOX_DESTINATIONS]
+
+    if not ranked_candidates:
+        raise ItineraryGenerationError(
+            "No destinations are available for route planning."
+        )
+
+    # Step 3: Build coordinate sequence
+    if start_coordinates is None:
+        try:
+            start_coordinates = geocode_location(trip.start_location)
+        except MapboxServiceError as exc:
+            raise ItineraryGenerationError(
+                f"Unable to locate trip starting point "
+                f"'{trip.start_location}'."
+            ) from exc
+
+    candidate_coordinates: list[tuple[float, float]] = [start_coordinates]
+
+    for scored_destination in ranked_candidates:
+        candidate_coordinates.append(
+            get_coordinates(scored_destination.destination)
+        )
+
+    if len(candidate_coordinates) > 25:
+        raise ItineraryGenerationError(
+            "Too many coordinates for Mapbox routing."
+        )
+
+    return ranked_candidates, candidate_coordinates
 
 
 def _rank_personalized_candidates(
@@ -183,115 +412,26 @@ def _rank_personalized_candidates(
 
     Weather is a soft signal only. If weather data is unavailable,
     the destination keeps its previous score.
+
+    NOTE: This function now delegates to _rank_candidates_with_intelligence
+    for the actual ranking logic, ensuring that weather and crowd intelligence
+    are applied regardless of personalization availability.
     """
 
-    base_ranked = rank_destinations(
-        candidates,
-        trip,
-    )
-
-    # If the trip does not belong to a valid user,
-    # safely fall back to the baseline ranking.
-    if trip.user_id is None:
-        personalized_ranked = base_ranked
-    else:
+    # Build user profile if available
+    user_profile = None
+    if trip.user_id is not None:
         user = db.get(User, trip.user_id)
+        if user is not None:
+            user_profile = build_user_profile(db, user)
 
-        if user is None:
-            personalized_ranked = base_ranked
-        else:
-            profile = build_user_profile(
-                db,
-                user,
-            )
-
-            personalized_ranked = []
-
-            for scored_destination in base_ranked:
-                destination = scored_destination.destination
-
-                # -------------------------------------------------
-                # Phase 6: Hybrid personalization
-                # -------------------------------------------------
-
-                personalization_score = hybrid_personalization_score(
-                    destination,
-                    trip,
-                    profile,
-                )
-
-                personalized_score = round(
-                    scored_destination.total_score * 0.65
-                    + personalization_score * 0.35,
-                    2,
-                )
-
-                personalization_reason = personalization_explanation(
-                    destination,
-                    trip,
-                    profile,
-                )
-
-                if personalization_reason:
-                    explanation = (
-                        f"{scored_destination.explanation} "
-                        f"{personalization_reason}"
-                    )
-                else:
-                    explanation = scored_destination.explanation
-
-                personalized_score_result = replace(
-                    scored_destination,
-                    total_score=personalized_score,
-                    explanation=explanation,
-                )
-
-                # -------------------------------------------------
-                # Phase 7: Weather intelligence
-                # -------------------------------------------------
-
-                weather_context = get_destination_weather_context(
-                    destination=destination,
-                    forecast_date=trip.start_date,
-                )
-
-                if weather_context is not None:
-                    personalized_score_result = apply_weather_score(
-                        destination_score=personalized_score_result,
-                        weather_context=weather_context,
-                    )
-                # -------------------------------------------------
-                # Phase 7B: Crowd intelligence
-                # -------------------------------------------------
-
-                weather_score = None
-
-                if weather_context is not None:
-                    weather_score = weather_context.suitability.score
-
-                personalized_score_result = apply_crowd_score(
-                    destination_score=personalized_score_result,
-                    trip=trip,
-                    weather_score=weather_score,
-                )
-
-                personalized_ranked.append(
-                    personalized_score_result
-                )
-
-    # -------------------------------------------------------------
-    # Final ranking
-    # -------------------------------------------------------------
-
-    personalized_ranked.sort(
-        key=lambda item: (
-            -item.total_score,
-            -item.popularity_score,
-            item.destination.id,
-        )
+    # Use the new reusable ranking function
+    return _rank_candidates_with_intelligence(
+        db=db,
+        trip=trip,
+        candidates=candidates,
+        user_profile=user_profile,
     )
-
-    return personalized_ranked
 
 def generate_itinerary(
     db: Session,
