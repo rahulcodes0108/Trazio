@@ -3,7 +3,9 @@
 Provides endpoints for itinerary management with ownership validation
 and automatic itinerary generation.
 """
+
 import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from sqlalchemy.orm import Session as DBSession
 
@@ -14,6 +16,7 @@ from app.api.schemas import (
     ItineraryPublic,
     ItineraryStopListResponse,
     ItineraryStopPublic,
+    ReplanningRequest as ReplanningAPIRequest,
 )
 from app.db.session import get_db
 from app.models.destination import Destination
@@ -25,6 +28,11 @@ from app.services.itinerary_generator import (
     ItineraryGenerationError,
     generate_itinerary,
 )
+from app.services.replanning_service import (
+    ReplanningError,
+    ReplanningRequest,
+    replan_itinerary,
+)
 from app.services.itinerary_service import ItineraryService
 from app.services.trip_service import TripService
 
@@ -32,10 +40,12 @@ from app.services.trip_service import TripService
 router = APIRouter(prefix="/itineraries", tags=["itineraries"])
 logger = logging.getLogger(__name__)
 
+
 def _convert_itinerary_to_response(
     itinerary: Itinerary,
 ) -> ItineraryPublic:
     """Convert an Itinerary model instance to ItineraryPublic."""
+
     return ItineraryPublic(
         id=itinerary.id,
         trip_id=itinerary.trip_id,
@@ -59,6 +69,7 @@ def _convert_itinerary_stop_to_response(
     stop: ItineraryStop,
 ) -> ItineraryStopPublic:
     """Convert an ItineraryStop model instance to ItineraryStopPublic."""
+
     return ItineraryStopPublic(
         id=stop.id,
         itinerary_id=stop.itinerary_id,
@@ -88,12 +99,8 @@ def _validate_trip_ownership(
     current_user: User,
     trip_id: int,
 ) -> Trip:
-    """Validate that the current user owns the trip.
+    """Validate that the current user owns the trip."""
 
-    Raises:
-        HTTPException: 404 if trip does not exist.
-        HTTPException: 403 if user does not own the trip.
-    """
     if trip is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -118,12 +125,8 @@ def _validate_itinerary_ownership(
     itinerary_id: int,
     db: DBSession,
 ) -> Itinerary:
-    """Validate ownership of an itinerary through its trip.
+    """Validate that the current user owns an itinerary through its trip."""
 
-    Raises:
-        HTTPException: 404 if itinerary does not exist.
-        HTTPException: 403 if user does not own the itinerary.
-    """
     if itinerary is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -173,6 +176,7 @@ async def create_itinerary_for_trip(
     db: DBSession = Depends(get_db),
 ) -> ItineraryPublic:
     """Create the next empty itinerary version for an owned trip."""
+
     trip = TripService.get_trip_by_id(
         db=db,
         trip_id=trip_id,
@@ -277,7 +281,11 @@ async def generate_itinerary_for_trip(
         ) from exc
     except Exception:
         db.rollback()
-        logger.exception("Unexpected error generating itinerary for trip %s", trip_id)
+
+        logger.exception(
+            "Unexpected error generating itinerary for trip %s",
+            trip_id,
+        )
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -389,27 +397,112 @@ async def get_itinerary_by_id(
         itinerary_id=itinerary_id,
     )
 
-    if itinerary is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Itinerary with ID {itinerary_id} not found",
-        )
-
-    trip = TripService.get_trip_by_id(
+    _validate_itinerary_ownership(
+        itinerary=itinerary,
+        current_user=current_user,
+        itinerary_id=itinerary_id,
         db=db,
-        trip_id=itinerary.trip_id,
     )
 
-    if trip is None or trip.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"You do not have permission to access "
-                f"itinerary with ID {itinerary_id}"
+    return _convert_itinerary_to_response(itinerary)
+
+
+@router.post(
+    "/{itinerary_id}/replan",
+    response_model=ItineraryPublic,
+    status_code=status.HTTP_201_CREATED,
+    summary="Replan an itinerary",
+    description=(
+        "Create a new itinerary version when one or more destinations "
+        "from the source itinerary become unavailable."
+    ),
+    responses={
+        400: {
+            "model": ErrorDetail,
+            "description": (
+                "Replanning request is invalid or no valid replanning "
+                "solution can be generated."
             ),
+        },
+        403: {
+            "model": ErrorDetail,
+            "description": "Forbidden - not the itinerary owner",
+        },
+        404: {
+            "model": ErrorDetail,
+            "description": "Itinerary not found",
+        },
+        500: {
+            "model": ErrorDetail,
+            "description": "Internal itinerary replanning error",
+        },
+    },
+)
+async def replan_itinerary_by_id(
+    request: ReplanningAPIRequest,
+    itinerary_id: int = Path(
+        ...,
+        ge=1,
+        description="Itinerary ID to replan",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db),
+) -> ItineraryPublic:
+    """Replan an owned itinerary around unavailable destinations."""
+
+    itinerary = ItineraryService.get_itinerary_by_id(
+        db=db,
+        itinerary_id=itinerary_id,
+    )
+
+    _validate_itinerary_ownership(
+        itinerary=itinerary,
+        current_user=current_user,
+        itinerary_id=itinerary_id,
+        db=db,
+    )
+
+    replanning_request = ReplanningRequest(
+        unavailable_destination_ids=frozenset(
+            request.unavailable_destination_ids
+        ),
+        reason=request.reason,
+    )
+
+    try:
+        new_itinerary = replan_itinerary(
+            db=db,
+            itinerary=itinerary,
+            request=replanning_request,
+        )
+    except ReplanningError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except ItineraryGenerationError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception:
+        db.rollback()
+
+        logger.exception(
+            "Unexpected error replanning itinerary %s",
+            itinerary_id,
         )
 
-    return _convert_itinerary_to_response(itinerary)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to replan itinerary.",
+        ) from None
+
+    return _convert_itinerary_to_response(new_itinerary)
 
 
 @router.get(
@@ -448,25 +541,12 @@ async def get_itinerary_stops(
         itinerary_id=itinerary_id,
     )
 
-    if itinerary is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Itinerary with ID {itinerary_id} not found",
-        )
-
-    trip = TripService.get_trip_by_id(
+    _validate_itinerary_ownership(
+        itinerary=itinerary,
+        current_user=current_user,
+        itinerary_id=itinerary_id,
         db=db,
-        trip_id=itinerary.trip_id,
     )
-
-    if trip is None or trip.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"You do not have permission to access "
-                f"itinerary with ID {itinerary_id}"
-            ),
-        )
 
     stops = ItineraryService.list_itinerary_stops(
         db=db,

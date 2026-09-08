@@ -3,7 +3,7 @@
 from datetime import date, datetime, time
 from typing import Any
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models.user import UserStatus
 from app.models.destination import DestinationCategory, AccessibilityLevel
@@ -312,3 +312,28 @@ class ItineraryStopListResponse(BaseModel):
     """Response schema for listing itinerary stops."""
     stops: list[ItineraryStopPublic]
     count: int
+
+class ReplanningRequest(BaseModel):
+    """API request schema for dynamic itinerary replanning."""
+
+    unavailable_destination_ids: list[int] = Field(
+        ...,
+        min_length=1,
+        description="Destination IDs that became unavailable.",
+    )
+
+    reason: str | None = Field(
+        None,
+        max_length=500,
+        description="Optional reason for the replanning request.",
+    )
+
+    @field_validator("unavailable_destination_ids")
+    @classmethod
+    def validate_destination_ids(cls, value: list[int]) -> list[int]:
+        """Ensure all unavailable destination IDs are positive."""
+        if any(destination_id < 1 for destination_id in value):
+            raise ValueError(
+                "Destination IDs must be greater than or equal to 1."
+            )
+        return value
