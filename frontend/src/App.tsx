@@ -1,13 +1,17 @@
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
 import { useRestoreSession } from "./hooks/useRestoreSession";
 import { useAuthStore } from "./stores/authStore";
+
+import LoginPage from "./pages/auth/LoginPage";
+import RegisterPage from "./pages/auth/RegisterPage";
+import HomePage from "./pages/HomePage";
+import ProtectedRoute from "./routes/ProtectedRoute";
 
 function App() {
   useRestoreSession();
 
   const isLoading = useAuthStore((state) => state.isLoading);
-  const isAuthenticated = useAuthStore(
-    (state) => state.isAuthenticated,
-  );
 
   if (isLoading) {
     return (
@@ -19,14 +23,24 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <h1>Trazio</h1>
-      <p>
-        {isAuthenticated
-          ? "Authenticated"
-          : "Tourism Platform - Infrastructure Setup in Progress"}
-      </p>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Navigate to="/login" replace />} />
+
+        <Route path="/login" element={<LoginPage />} />
+
+        <Route path="/register" element={<RegisterPage />} />
+
+        <Route element={<ProtectedRoute />}>
+          <Route path="/home" element={<HomePage />} />
+        </Route>
+
+        <Route
+          path="*"
+          element={<Navigate to="/login" replace />}
+        />
+      </Routes>
+    </BrowserRouter>
   );
 }
 
