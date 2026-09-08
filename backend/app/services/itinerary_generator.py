@@ -82,6 +82,75 @@ def _filter_candidates(
         and _destination_fee(destination) <= maximum_fee
     ]
 
+def _limit_ranked_candidates(
+    ranked_candidates: list[DestinationScore],
+    required_destination_ids: set[int],
+) -> list[DestinationScore]:
+    """Limit candidates while preserving every required destination."""
+
+    if len(ranked_candidates) <= MAX_MAPBOX_DESTINATIONS:
+        return ranked_candidates
+
+    required_candidates = [
+        candidate
+        for candidate in ranked_candidates
+        if candidate.destination.id in required_destination_ids
+    ]
+
+    if len(required_candidates) > MAX_MAPBOX_DESTINATIONS:
+        raise ItineraryGenerationError(
+            "The number of required destinations exceeds the "
+            "maximum number of destinations that can be optimized."
+        )
+
+    required_ids = {
+        candidate.destination.id
+        for candidate in required_candidates
+    }
+
+    remaining_candidates = [
+        candidate
+        for candidate in ranked_candidates
+        if candidate.destination.id not in required_ids
+    ]
+
+    remaining_slots = (
+        MAX_MAPBOX_DESTINATIONS - len(required_candidates)
+    )
+
+    selected = remaining_candidates[:remaining_slots]
+
+    combined = required_candidates + selected
+
+    # Preserve the original intelligence ranking order.
+    original_order = {
+        candidate.destination.id: index
+        for index, candidate in enumerate(ranked_candidates)
+    }
+
+    combined.sort(
+        key=lambda candidate: original_order[candidate.destination.id]
+    )
+
+    return combined
+
+
+def _required_destination_ids(trip: Trip) -> set[int]:
+
+    """Return valid required destination IDs from trip preferences."""
+    preferences = trip.preferences or {}
+
+    required_ids = preferences.get("required_destination_ids", [])
+
+    if not isinstance(required_ids, list):
+        return set()
+
+    return {
+        destination_id
+        for destination_id in required_ids
+        if isinstance(destination_id, int) and destination_id > 0
+    }
+
 
 def _transport_mode_value(trip: Trip) -> str:
     """Return the normalized transport mode."""
@@ -358,7 +427,13 @@ def _build_generation_pipeline(
     )
 
     # Step 2: Apply Mapbox coordinate limit
-    ranked_candidates = ranked_candidates[:MAX_MAPBOX_DESTINATIONS]
+    # Step 2: Apply Mapbox coordinate limit
+    required_destination_ids = _required_destination_ids(trip)
+
+    ranked_candidates = _limit_ranked_candidates(
+        ranked_candidates=ranked_candidates,
+        required_destination_ids=required_destination_ids,
+    )
 
     if not ranked_candidates:
         raise ItineraryGenerationError(
@@ -395,6 +470,7 @@ def _execute_itinerary_planning(
     candidate_coordinates: list[tuple[float, float]],
     trip: Trip,
     start_coordinates: tuple[float, float],
+    required_destination_ids: set[int] | None = None,
 ) -> tuple[
     list[tuple[Destination, int, int, float, str]],
     int,
@@ -432,6 +508,8 @@ def _execute_itinerary_planning(
     Raises:
         ItineraryGenerationError: If planning fails at any step
     """
+
+    required_destination_ids = required_destination_ids or set()
     # Step 1: Mapbox travel-time/distance matrix
     transport_mode = _transport_mode_value(trip)
 
@@ -474,13 +552,14 @@ def _execute_itinerary_planning(
 
     # Step 3: OR-Tools optimization
     optimization_result = optimize_itinerary(
-        candidates=ranked_candidates,
-        travel_minutes=travel_matrix,
-        visit_durations=visit_durations,
-        entry_fees=entry_fees,
-        available_minutes=available_minutes,
-        budget_amount=budget_amount,
-        max_stops=min(8, len(ranked_candidates)),
+    candidates=ranked_candidates,
+    travel_minutes=travel_matrix,
+    visit_durations=visit_durations,
+    entry_fees=entry_fees,
+    available_minutes=available_minutes,
+    budget_amount=budget_amount,
+    max_stops=min(8, len(ranked_candidates)),
+    required_destination_ids=required_destination_ids,
     )
 
     if not optimization_result.stops:
@@ -718,6 +797,28 @@ def generate_itinerary(
         trip,
     )
 
+    required_destination_ids = _required_destination_ids(trip)
+
+    eligible_destination_ids = {
+        destination.id
+        for destination in candidates
+    }
+
+    missing_required_ids = (
+        required_destination_ids - eligible_destination_ids
+    )
+
+    if missing_required_ids:
+        missing_ids = ", ".join(
+            str(destination_id)
+            for destination_id in sorted(missing_required_ids)
+        )
+
+        raise ItineraryGenerationError(
+            "Required destination(s) "
+            f"{missing_ids} do not satisfy the trip's hard constraints."
+        )
+
     if not candidates:
         raise ItineraryGenerationError(
             "No destinations match the trip requirements."
@@ -747,11 +848,10 @@ def generate_itinerary(
         candidates=candidates,
     )
 
-    # Mapbox allows at most 25 coordinates.
-    # One coordinate is the starting location.
-    ranked_candidates = ranked_candidates[
-        :MAX_MAPBOX_DESTINATIONS
-    ]
+    ranked_candidates = _limit_ranked_candidates(
+        ranked_candidates=ranked_candidates,
+        required_destination_ids=required_destination_ids,
+    )
 
     if not ranked_candidates:
         raise ItineraryGenerationError(
@@ -789,6 +889,7 @@ def generate_itinerary(
             candidate_coordinates=candidate_coordinates,
             trip=trip,
             start_coordinates=start_coordinates,
+            required_destination_ids=required_destination_ids,
         )
     )
 

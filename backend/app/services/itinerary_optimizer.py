@@ -40,6 +40,7 @@ def optimize_itinerary(
     available_minutes: int,
     budget_amount: float | None = None,
     max_stops: int = 8,
+    required_destination_ids: set[int] | None = None,
 ) -> OptimizationResult:
     """
     Select and order destinations subject to itinerary constraints.
@@ -53,8 +54,12 @@ def optimize_itinerary(
 
     The final destination does not require a return trip to
     the starting location.
+
+    Required destinations are treated as hard constraints and
+    must be included in the optimized itinerary.
     """
 
+    required_destination_ids = required_destination_ids or set()
     candidate_count = len(candidates)
 
     # ---------------------------------------------------------
@@ -62,6 +67,12 @@ def optimize_itinerary(
     # ---------------------------------------------------------
 
     if candidate_count == 0:
+        if required_destination_ids:
+            raise ValueError(
+                "Required destinations cannot be satisfied because "
+                "the candidate list is empty."
+            )
+
         return OptimizationResult(
             stops=[],
             total_travel_minutes=0,
@@ -96,6 +107,12 @@ def optimize_itinerary(
         )
 
     if available_minutes <= 0:
+        if required_destination_ids:
+            raise ValueError(
+                "Required destinations cannot be satisfied "
+                "with no available trip time."
+            )
+
         return OptimizationResult(
             stops=[],
             total_travel_minutes=0,
@@ -110,6 +127,36 @@ def optimize_itinerary(
     )
 
     # ---------------------------------------------------------
+    # Required destination validation
+    # ---------------------------------------------------------
+
+    candidate_destination_ids = {
+        candidate.destination.id
+        for candidate in candidates
+    }
+
+    missing_required_ids = (
+        required_destination_ids - candidate_destination_ids
+    )
+
+    if missing_required_ids:
+        missing_ids = ", ".join(
+            str(destination_id)
+            for destination_id in sorted(missing_required_ids)
+        )
+
+        raise ValueError(
+            "Required destination(s) "
+            f"{missing_ids} are not present in the candidate list."
+        )
+
+    if len(required_destination_ids) > max_stops:
+        raise ValueError(
+            "The number of required destinations exceeds "
+            "the maximum number of itinerary stops."
+        )
+
+    # ---------------------------------------------------------
     # OR-Tools routing model
     # ---------------------------------------------------------
 
@@ -120,6 +167,8 @@ def optimize_itinerary(
     )
 
     routing = pywrapcp.RoutingModel(manager)
+
+    solver = routing.solver()
 
     # ---------------------------------------------------------
     # Time constraint
@@ -225,14 +274,8 @@ def optimize_itinerary(
         ).SetValue(0)
 
     # ---------------------------------------------------------
-    # Optional destinations
+    # Optional / required destinations
     # ---------------------------------------------------------
-
-    # Every destination is optional.
-    #
-    # The penalty represents the value lost when a destination
-    # is skipped. Higher-scoring destinations therefore have
-    # larger skip penalties and are preferred by the optimizer.
 
     max_score = max(
         1.0,
@@ -250,6 +293,17 @@ def optimize_itinerary(
             candidate_index
         )
 
+        destination_id = candidate.destination.id
+
+        # Required destinations are hard constraints.
+        # They MUST be included in the final route.
+        if destination_id in required_destination_ids:
+            solver.Add(
+                routing.ActiveVar(routing_index) == 1
+            )
+            continue
+
+        # Optional destinations use score-based skip penalties.
         score_ratio = (
             candidate.total_score / max_score
         )
@@ -281,8 +335,6 @@ def optimize_itinerary(
             routing.ActiveVar(routing_index)
         )
 
-    solver = routing.solver()
-
     solver.Add(
         sum(active_variables) <= max_stops
     )
@@ -312,6 +364,12 @@ def optimize_itinerary(
     )
 
     if assignment is None:
+        if required_destination_ids:
+            raise ValueError(
+                "No feasible itinerary could include all "
+                "required destinations within the trip constraints."
+            )
+
         return OptimizationResult(
             stops=[],
             total_travel_minutes=0,
@@ -359,6 +417,30 @@ def optimize_itinerary(
                 )
 
         index = next_index
+
+    # ---------------------------------------------------------
+    # Verify required destinations were selected
+    # ---------------------------------------------------------
+
+    selected_destination_ids = {
+        candidates[node - 1].destination.id
+        for node in selected_nodes
+    }
+
+    missing_required_ids = (
+        required_destination_ids - selected_destination_ids
+    )
+
+    if missing_required_ids:
+        missing_ids = ", ".join(
+            str(destination_id)
+            for destination_id in sorted(missing_required_ids)
+        )
+
+        raise ValueError(
+            "Optimizer failed to include required "
+            f"destination(s): {missing_ids}."
+        )
 
     # ---------------------------------------------------------
     # Build optimized stops
