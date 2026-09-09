@@ -30,6 +30,21 @@ class Settings(BaseSettings):
         description="Mapbox public access token for geocoding and routing",
     )
 
+    # Cloudinary
+    CLOUDINARY_CLOUD_NAME: str | None = Field(
+        default=None,
+        description="Cloudinary cloud name for destination image uploads",
+    )
+    CLOUDINARY_API_KEY: str | None = Field(
+        default=None,
+        description="Cloudinary API key for destination image uploads",
+    )
+    CLOUDINARY_API_SECRET: str | None = Field(
+        default=None,
+        description="Cloudinary API secret for destination image uploads",
+    )
+
+
     # Authentication
     JWT_SECRET_KEY: str = Field(
     description="JWT signing secret key",

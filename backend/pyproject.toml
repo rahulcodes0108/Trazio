@@ -34,6 +34,7 @@ dependencies = [
     "Shapely>=2.0,<3.0",
     "ortools>=9.10.0",
     "redis>=5.0.0",
+    "cloudinary>=1.44.0",
 ]
 
 [project.optional-dependencies]

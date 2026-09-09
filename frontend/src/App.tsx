@@ -8,6 +8,8 @@ import EditTripPage from "./pages/trips/EditTripPage";
 import TripDetailsPage from "./pages/trips/TripDetailsPage";
 import { useRestoreSession } from "./hooks/useRestoreSession";
 import { useAuthStore } from "./stores/authStore";
+import DestinationsPage from "./pages/destinations/DestinationsPage";
+import DestinationDetailPage from "./pages/destinations/DestinationDetailPage";
 
 import CreateTripPage from "./pages/trips/CreateTripPage";
 import HomePage from "./pages/HomePage";
@@ -72,6 +74,14 @@ function App() {
           <Route
             path="/trips/:tripId/edit"
             element={<EditTripPage />}
+          />
+          <Route
+            path="/destinations"
+            element={<DestinationsPage />}
+          />
+          <Route
+            path="/destinations/:slug"
+            element={<DestinationDetailPage />}
           />
         </Route>
 

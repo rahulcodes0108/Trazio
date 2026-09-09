@@ -91,6 +91,10 @@ class Destination(Base, TimestampMixin):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(
+    String(1000),
+    nullable=True,
+    )
     category: Mapped[DestinationCategory] = mapped_column(
     SQLEnum(
         DestinationCategory,

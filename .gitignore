@@ -99,3 +99,7 @@ htmlcov/
 # =============================================================================
 docker-compose.override.yml
 *.log
+
+# Destination source images are local staging files.
+# Canonical images are stored in Cloudinary.
+backend/scripts/destination_images/

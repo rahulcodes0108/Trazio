@@ -16,6 +16,9 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - MAPBOX_ACCESS_TOKEN=${MAPBOX_ACCESS_TOKEN:-}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME:-}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY:-}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
     depends_on:
       postgres:
         condition: service_healthy

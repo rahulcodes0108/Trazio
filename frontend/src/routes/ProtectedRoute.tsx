@@ -1,36 +1,28 @@
-import { Navigate, Outlet, useLocation } from "react-router-dom";
-
+import type { ReactNode } from "react";
+import { Navigate, Outlet } from "react-router-dom";
 import { useAuthStore } from "../stores/authStore";
 
-export default function ProtectedRoute() {
-  const location = useLocation();
+interface ProtectedRouteProps {
+  children?: ReactNode;
+}
 
-  const isAuthenticated = useAuthStore(
-    (state) => state.isAuthenticated,
-  );
-
-  const isLoading = useAuthStore(
-    (state) => state.isLoading,
-  );
+export default function ProtectedRoute({
+  children,
+}: ProtectedRouteProps) {
+  const { isAuthenticated, isLoading } = useAuthStore();
 
   if (isLoading) {
     return (
-      <div className="app">
-        <h1>Trazio</h1>
+      <div className="auth-loading">
+        <div className="loading-spinner" />
         <p>Restoring your session...</p>
       </div>
     );
   }
 
   if (!isAuthenticated) {
-    return (
-      <Navigate
-        to="/login"
-        replace
-        state={{ from: location.pathname }}
-      />
-    );
+    return <Navigate to="/login" replace />;
   }
 
-  return <Outlet />;
+  return children ? <>{children}</> : <Outlet />;
 }

@@ -116,6 +116,7 @@ class DestinationBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     slug: str = Field(..., min_length=1, max_length=120)
     description: str | None = Field(None, max_length=10000)
+    image_url: str | None = Field(None, max_length=1000)
     category: DestinationCategory = Field(..., description="Category of the destination")
     location: str = Field(..., description="Location as WKT string (POINT(lon lat))")
     address_line1: str | None = Field(None, max_length=200)
