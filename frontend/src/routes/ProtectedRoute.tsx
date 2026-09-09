@@ -11,6 +11,11 @@ export default function ProtectedRoute({
 }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading } = useAuthStore();
 
+  console.log("PROTECTED ROUTE:", {
+    isAuthenticated,
+    isLoading,
+    path: window.location.pathname,
+  });
   if (isLoading) {
     return (
       <div className="auth-loading">

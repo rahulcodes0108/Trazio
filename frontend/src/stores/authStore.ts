@@ -49,19 +49,28 @@ export const useAuthStore = create<AuthState>((set) => ({
 
     try {
       const tokens = await authApi.login(payload);
-      const user = await authApi.me();
+
+      
 
       tokenStorage.setTokens(
         tokens.access_token,
         tokens.refresh_token,
       );
 
+      
+
+      const user = await authApi.me();
+
+      
       set({
         user,
         isAuthenticated: true,
         isLoading: false,
       });
     } catch (error) {
+      
+      tokenStorage.clear();
+
       set({
         user: null,
         isAuthenticated: false,
@@ -77,12 +86,14 @@ export const useAuthStore = create<AuthState>((set) => ({
 
     try {
       const tokens = await authApi.register(payload);
-      const user = await authApi.me();
 
+      // Store the access token BEFORE calling /auth/me.
       tokenStorage.setTokens(
         tokens.access_token,
         tokens.refresh_token,
       );
+
+      const user = await authApi.me();
 
       set({
         user,
@@ -90,6 +101,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         isLoading: false,
       });
     } catch (error) {
+      tokenStorage.clear();
+
       set({
         user: null,
         isAuthenticated: false,

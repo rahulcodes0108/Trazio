@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 # Configure logging
@@ -31,21 +32,59 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Include API routers
-from app.api.routers import auth_router, destinations_router, trips_router, itineraries_router
 
-# Include routers
+# ---------------------------------------------------------
+# CORS
+# ---------------------------------------------------------
+
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://172.17.208.1:5173",
+    "http://172.17.208.1:5174",
+]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ---------------------------------------------------------
+# API routers
+# ---------------------------------------------------------
+
+from app.api.routers import (
+    auth_router,
+    destinations_router,
+    trips_router,
+    itineraries_router,
+)
+
 app.include_router(auth_router)
 app.include_router(destinations_router)
 app.include_router(trips_router)
 app.include_router(itineraries_router)
 
 
+# ---------------------------------------------------------
+# Health check
+# ---------------------------------------------------------
+
 @app.get("/health", response_model=dict)
 async def health_check():
     """Health check endpoint."""
     return JSONResponse(
-        content={"status": "healthy", "version": "0.1.0"},
+        content={
+            "status": "healthy",
+            "version": "0.1.0",
+        },
         status_code=200,
     )
 
@@ -53,4 +92,8 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+    )

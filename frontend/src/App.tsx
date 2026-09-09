@@ -4,39 +4,33 @@ import {
   Route,
   Routes,
 } from "react-router-dom";
-import EditTripPage from "./pages/trips/EditTripPage";
-import TripDetailsPage from "./pages/trips/TripDetailsPage";
+
 import { useRestoreSession } from "./hooks/useRestoreSession";
-import { useAuthStore } from "./stores/authStore";
-import DestinationsPage from "./pages/destinations/DestinationsPage";
-import DestinationDetailPage from "./pages/destinations/DestinationDetailPage";
-import ItineraryPage from "./pages/itineraries/ItineraryPage";
-import CreateTripPage from "./pages/trips/CreateTripPage";
-import HomePage from "./pages/HomePage";
+
+import ProtectedRoute from "./routes/ProtectedRoute";
+
 import LoginPage from "./pages/auth/LoginPage";
 import RegisterPage from "./pages/auth/RegisterPage";
+import HomePage from "./pages/HomePage";
+
 import TripsPage from "./pages/trips/TripsPage";
-import ProtectedRoute from "./routes/ProtectedRoute";
+import CreateTripPage from "./pages/trips/CreateTripPage";
+import TripDetailsPage from "./pages/trips/TripDetailsPage";
+import EditTripPage from "./pages/trips/EditTripPage";
+
+import DestinationsPage from "./pages/destinations/DestinationsPage";
+import DestinationDetailPage from "./pages/destinations/DestinationDetailPage";
+
+import ItineraryPage from "./pages/itineraries/ItineraryPage";
 
 function App() {
   useRestoreSession();
 
-  const isLoading = useAuthStore(
-    (state) => state.isLoading,
-  );
-
-  if (isLoading) {
-    return (
-      <div className="app">
-        <h1>Trazio</h1>
-        <p>Restoring your session...</p>
-      </div>
-    );
-  }
-
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public routes */}
+
         <Route
           path="/"
           element={<Navigate to="/login" replace />}
@@ -51,6 +45,8 @@ function App() {
           path="/register"
           element={<RegisterPage />}
         />
+
+        {/* Protected routes */}
 
         <Route element={<ProtectedRoute />}>
           <Route
@@ -67,27 +63,34 @@ function App() {
             path="/trips/new"
             element={<CreateTripPage />}
           />
-           <Route
+
+          <Route
             path="/trips/:tripId"
             element={<TripDetailsPage />}
           />
+
           <Route
             path="/trips/:tripId/edit"
             element={<EditTripPage />}
           />
+
           <Route
             path="/destinations"
             element={<DestinationsPage />}
           />
+
           <Route
             path="/destinations/:slug"
             element={<DestinationDetailPage />}
           />
+
           <Route
-            path="/itineraries/:itineraryId"
+            path="/trips/:tripId/itineraries/:itineraryId"
             element={<ItineraryPage />}
           />
         </Route>
+
+        {/* Unknown routes */}
 
         <Route
           path="*"

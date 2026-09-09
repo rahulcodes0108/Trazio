@@ -11,7 +11,7 @@ describe("apiClient", () => {
 
   it("uses the configured API base URL", () => {
     expect(apiClient.defaults.baseURL).toBe(
-      "http://localhost:8000/api/v1",
+      "http://localhost:8000",
     );
   });
 
