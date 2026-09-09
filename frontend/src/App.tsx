@@ -10,7 +10,7 @@ import { useRestoreSession } from "./hooks/useRestoreSession";
 import { useAuthStore } from "./stores/authStore";
 import DestinationsPage from "./pages/destinations/DestinationsPage";
 import DestinationDetailPage from "./pages/destinations/DestinationDetailPage";
-
+import ItineraryPage from "./pages/itineraries/ItineraryPage";
 import CreateTripPage from "./pages/trips/CreateTripPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/auth/LoginPage";
@@ -82,6 +82,10 @@ function App() {
           <Route
             path="/destinations/:slug"
             element={<DestinationDetailPage />}
+          />
+          <Route
+            path="/itineraries/:itineraryId"
+            element={<ItineraryPage />}
           />
         </Route>
 

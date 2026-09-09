@@ -1,168 +1,202 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+
 import TripDetailsPage from "./TripDetailsPage";
 
 const mockTrip = {
   id: 1,
-  user_id: 10,
-  title: "Chennai Day Trip",
-  description: "Explore Chennai in one day.",
+  title: "Chennai Explorer",
+  description: "A day exploring Chennai.",
   start_location: "Chennai Central",
-  start_date: "2026-09-15",
-  start_time: "09:00:00",
-  end_date: null,
-  end_time: null,
+  start_date: "2026-09-10",
+  start_time: "09:00",
   available_duration_minutes: 420,
-  budget_level: "mid_range" as const,
-  budget_amount: 1500,
+  budget_level: "moderate",
+  budget_amount: 1000,
   budget_currency: "INR",
-  transport_mode: "mixed" as const,
-  preferences: null,
-  status: "draft" as const,
-  is_public: false,
-  share_token: null,
-  created_at: "2026-09-01T10:00:00Z",
-  updated_at: "2026-09-01T10:00:00Z",
+  transport_mode: "car",
+  status: "draft",
+  preferences: {},
+  created_at: "2026-09-09T00:00:00Z",
+  updated_at: "2026-09-09T00:00:00Z",
 };
 
-const mockUseTrip = vi.fn();
-const mockUseDeleteTrip = vi.fn();
+const mockItineraries = {
+  itineraries: [],
+  count: 0,
+};
 
 vi.mock("../../hooks/useTrips", () => ({
-  useTrip: (...args: unknown[]) => mockUseTrip(...args),
-  useDeleteTrip: () => mockUseDeleteTrip(),
+  useTrip: vi.fn(),
+  useDeleteTrip: vi.fn(),
 }));
 
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual<typeof import("react-router-dom")>(
-    "react-router-dom",
-  );
+vi.mock("../../hooks/useItineraries", () => ({
+  useItineraries: vi.fn(),
+  useGenerateItinerary: vi.fn(),
+}));
 
-  return {
-    ...actual,
-    useParams: () => ({ tripId: "1" }),
-    useNavigate: () => vi.fn(),
-  };
-});
+import {
+  useDeleteTrip,
+  useTrip,
+} from "../../hooks/useTrips";
+
+import {
+  useGenerateItinerary,
+  useItineraries,
+} from "../../hooks/useItineraries";
+
+function createQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        retry: false,
+      },
+    },
+  });
+}
 
 function renderPage() {
+  const queryClient = createQueryClient();
+
   return render(
-    <MemoryRouter initialEntries={["/trips/1"]}>
-      <TripDetailsPage />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter
+        initialEntries={["/trips/1"]}
+      >
+        <Routes>
+          <Route
+            path="/trips/:tripId"
+            element={<TripDetailsPage />}
+          />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
 describe("TripDetailsPage", () => {
-  it("renders the trip details", () => {
-    mockUseTrip.mockReturnValue({
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    vi.mocked(useTrip).mockReturnValue({
       data: mockTrip,
       isLoading: false,
       isError: false,
       refetch: vi.fn(),
-    });
+    } as never);
 
-    mockUseDeleteTrip.mockReturnValue({
+    vi.mocked(useItineraries).mockReturnValue({
+      data: mockItineraries,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as never);
+
+    vi.mocked(useGenerateItinerary).mockReturnValue({
+      mutate: vi.fn(),
       mutateAsync: vi.fn(),
       isPending: false,
-    });
+      isError: false,
+      error: null,
+    } as never);
 
+    vi.mocked(useDeleteTrip).mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as never);
+  });
+
+  it("renders the trip details", () => {
     renderPage();
 
     expect(
       screen.getByRole("heading", {
-        name: "Chennai Day Trip",
+        name: "Chennai Explorer",
       }),
     ).toBeInTheDocument();
 
-    expect(screen.getByText("Chennai Central")).toBeInTheDocument();
     expect(
-      screen.getByText("Explore Chennai in one day."),
+      screen.getByText("Chennai Central"),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.getByText("2026-09-10"),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.getByText("7 hr"),
     ).toBeInTheDocument();
   });
 
   it("renders the loading state", () => {
-    mockUseTrip.mockReturnValue({
+    vi.mocked(useTrip).mockReturnValue({
       data: undefined,
       isLoading: true,
       isError: false,
       refetch: vi.fn(),
-    });
-
-    mockUseDeleteTrip.mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    });
-
-    renderPage();
-
-    expect(screen.getByText(/loading trip/i)).toBeInTheDocument();
-  });
-
-  it("renders the error state", () => {
-    mockUseTrip.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isError: true,
-      refetch: vi.fn(),
-    });
-
-    mockUseDeleteTrip.mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    });
+    } as never);
 
     renderPage();
 
     expect(
       screen.getByRole("heading", {
-        name: /trip unavailable/i,
+        name: "Loading trip...",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the error state", () => {
+    vi.mocked(useTrip).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      refetch: vi.fn(),
+    } as never);
+
+    renderPage();
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Trip unavailable",
+      }),
+    ).toBeInTheDocument();
+
+    expect(
+      screen.getByRole("link", {
+        name: "Back to trips",
       }),
     ).toBeInTheDocument();
   });
 
   it("provides an edit link", () => {
-    mockUseTrip.mockReturnValue({
-      data: mockTrip,
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    });
-
-    mockUseDeleteTrip.mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    });
-
     renderPage();
 
     expect(
       screen.getByRole("link", {
-        name: /edit/i,
+        name: "Edit trip",
       }),
-    ).toHaveAttribute("href", "/trips/1/edit");
+    ).toHaveAttribute(
+      "href",
+      "/trips/1/edit",
+    );
   });
 
-  it("keeps itinerary generation disabled", () => {
-    mockUseTrip.mockReturnValue({
-      data: mockTrip,
-      isLoading: false,
-      isError: false,
-      refetch: vi.fn(),
-    });
-
-    mockUseDeleteTrip.mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    });
-
+  it("enables itinerary generation when no itinerary exists", () => {
     renderPage();
 
-    expect(
-      screen.getByRole("button", {
-        name: /generate itinerary/i,
-      }),
-    ).toBeDisabled();
+    const button = screen.getByRole("button", {
+      name: "Generate itinerary",
+    });
+
+    expect(button).toBeEnabled();
   });
 });
