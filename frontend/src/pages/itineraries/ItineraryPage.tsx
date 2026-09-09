@@ -1,10 +1,15 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import axios from "axios";
 
 import {
   useItinerary,
   useItineraryStops,
+  useReplanItinerary,
 } from "../../hooks/useItineraries";
 import { useDestinations } from "../../hooks/useDestinations";
 import ItineraryMap from "../../components/maps/ItineraryMap";
@@ -133,9 +138,21 @@ function parsePointCoordinates(
 
 export default function ItineraryPage() {
   const { itineraryId } = useParams();
+  const navigate = useNavigate();
 
   const [selectedStopId, setSelectedStopId] =
     useState<number | null>(null);
+
+  const [
+    unavailableDestinationIds,
+    setUnavailableDestinationIds,
+  ] = useState<number[]>([]);
+
+  const [replanReason, setReplanReason] =
+    useState("");
+
+  const [showReplanPanel, setShowReplanPanel] =
+    useState(false);
 
   const parsedItineraryId = Number(itineraryId);
 
@@ -150,7 +167,9 @@ export default function ItineraryPage() {
     error: itineraryError,
     refetch: refetchItinerary,
   } = useItinerary(
-    validItineraryId ? parsedItineraryId : 0,
+    validItineraryId
+      ? parsedItineraryId
+      : 0,
   );
 
   const {
@@ -160,7 +179,9 @@ export default function ItineraryPage() {
     error: stopsError,
     refetch: refetchStops,
   } = useItineraryStops(
-    validItineraryId ? parsedItineraryId : 0,
+    validItineraryId
+      ? parsedItineraryId
+      : 0,
   );
 
   const {
@@ -169,15 +190,22 @@ export default function ItineraryPage() {
     isError: areDestinationsError,
   } = useDestinations(0, 100);
 
+  const replanMutation =
+    useReplanItinerary(
+      validItineraryId
+        ? parsedItineraryId
+        : 0,
+    );
+
   const destinationsById = useMemo(
     () =>
       new Map(
-        (destinationData?.destinations ?? []).map(
-          (destination) => [
-            destination.id,
-            destination,
-          ],
-        ),
+        (
+          destinationData?.destinations ?? []
+        ).map((destination) => [
+          destination.id,
+          destination,
+        ]),
       ),
     [destinationData],
   );
@@ -190,8 +218,8 @@ export default function ItineraryPage() {
             <h2>Invalid itinerary</h2>
 
             <p>
-              The itinerary you're looking for doesn't
-              have a valid ID.
+              The itinerary you're looking for
+              doesn't have a valid ID.
             </p>
 
             <Link
@@ -210,22 +238,34 @@ export default function ItineraryPage() {
     return (
       <main className="itinerary-page">
         <div className="itinerary-container">
-          <p className="page-eyebrow">ITINERARY</p>
-          <h1>Loading itinerary...</h1>
+          <p className="page-eyebrow">
+            ITINERARY
+          </p>
+
+          <h1>
+            Loading itinerary...
+          </h1>
         </div>
       </main>
     );
   }
 
-  if (isItineraryError || !itinerary) {
+  if (
+    isItineraryError ||
+    !itinerary
+  ) {
     return (
       <main className="itinerary-page">
         <div className="itinerary-container">
           <div className="state-card">
-            <h2>Itinerary unavailable</h2>
+            <h2>
+              Itinerary unavailable
+            </h2>
 
             <p>
-              {getErrorMessage(itineraryError)}
+              {getErrorMessage(
+                itineraryError,
+              )}
             </p>
 
             <div className="form-actions">
@@ -254,37 +294,106 @@ export default function ItineraryPage() {
   const stops = [
     ...(stopData?.stops ?? []),
   ].sort(
-    (a, b) => a.sequence - b.sequence,
+    (a, b) =>
+      a.sequence - b.sequence,
   );
 
-  const mapStops = stops.flatMap((stop) => {
-    const destination =
-      destinationsById.get(
-        stop.destination_id,
-      );
+  const mapStops = stops.flatMap(
+    (stop) => {
+      const destination =
+        destinationsById.get(
+          stop.destination_id,
+        );
 
-    if (!destination) {
-      return [];
+      if (!destination) {
+        return [];
+      }
+
+      const coordinates =
+        parsePointCoordinates(
+          destination.location,
+        );
+
+      if (!coordinates) {
+        return [];
+      }
+
+      return [
+        {
+          id: stop.id,
+          sequence: stop.sequence,
+          name: destination.name,
+          coordinates,
+        },
+      ];
+    },
+  );
+
+  const toggleUnavailableDestination = (
+    destinationId: number,
+  ) => {
+    setUnavailableDestinationIds(
+      (current) =>
+        current.includes(destinationId)
+          ? current.filter(
+              (id) =>
+                id !== destinationId,
+            )
+          : [
+              ...current,
+              destinationId,
+            ],
+    );
+  };
+
+  const handleOpenReplan = () => {
+    replanMutation.reset();
+    setShowReplanPanel(true);
+  };
+
+  const handleCancelReplan = () => {
+    if (replanMutation.isPending) {
+      return;
     }
 
-    const coordinates =
-      parsePointCoordinates(
-        destination.location,
-      );
+    setShowReplanPanel(false);
+    setUnavailableDestinationIds([]);
+    setReplanReason("");
+    replanMutation.reset();
+  };
 
-    if (!coordinates) {
-      return [];
+  const handleReplan = async () => {
+    if (
+      unavailableDestinationIds.length ===
+      0
+    ) {
+      return;
     }
 
-    return [
-      {
-        id: stop.id,
-        sequence: stop.sequence,
-        name: destination.name,
-        coordinates,
-      },
-    ];
-  });
+    try {
+      const newItinerary =
+        await replanMutation.mutateAsync({
+          unavailable_destination_ids:
+            unavailableDestinationIds,
+          reason:
+            replanReason.trim() ||
+            null,
+        });
+
+      setUnavailableDestinationIds([]);
+      setReplanReason("");
+      setShowReplanPanel(false);
+
+      navigate(
+        `/itineraries/${newItinerary.id}`,
+      );
+    } catch {
+      /*
+       * The mutation error is rendered
+       * inside the replan panel.
+       */
+    }
+  };
 
   return (
     <main className="itinerary-page">
@@ -324,6 +433,7 @@ export default function ItineraryPage() {
         <section className="itinerary-overview">
           <article>
             <span>STOPS</span>
+
             <strong>
               {itinerary.stop_count}
             </strong>
@@ -331,6 +441,7 @@ export default function ItineraryPage() {
 
           <article>
             <span>TOTAL TIME</span>
+
             <strong>
               {formatDuration(
                 itinerary.total_duration_minutes,
@@ -340,6 +451,7 @@ export default function ItineraryPage() {
 
           <article>
             <span>TRAVEL TIME</span>
+
             <strong>
               {formatDuration(
                 itinerary.estimated_travel_duration_minutes,
@@ -349,6 +461,7 @@ export default function ItineraryPage() {
 
           <article>
             <span>ESTIMATED COST</span>
+
             <strong>
               {formatCost(
                 itinerary.estimated_cost,
@@ -364,9 +477,193 @@ export default function ItineraryPage() {
               PLANNING NOTES
             </p>
 
-            <p>{itinerary.notes}</p>
+            <p>
+              {itinerary.notes}
+            </p>
           </section>
         )}
+
+        <section className="itinerary-replan-card">
+          <div className="itinerary-replan-header">
+            <div>
+              <span className="itinerary-section-eyebrow">
+                DYNAMIC PLANNING
+              </span>
+
+              <h2>
+                Need to change your itinerary?
+              </h2>
+
+              <p>
+                Mark a destination as
+                unavailable and Trazio will
+                create a new optimized version
+                without changing this itinerary.
+              </p>
+            </div>
+
+            {!showReplanPanel && (
+              <button
+                type="button"
+                className="itinerary-secondary-button"
+                onClick={
+                  handleOpenReplan
+                }
+              >
+                Replan trip
+              </button>
+            )}
+          </div>
+
+          {showReplanPanel && (
+            <div className="itinerary-replan-body">
+              <div className="itinerary-replan-warning">
+                <strong>
+                  Which destinations are
+                  unavailable?
+                </strong>
+
+                <span>
+                  Select one or more stops
+                  that can no longer be
+                  visited.
+                </span>
+              </div>
+
+              <div className="itinerary-replan-stops">
+                {stops.map((stop) => {
+                  const destination =
+                    destinationsById.get(
+                      stop.destination_id,
+                    );
+
+                  const selected =
+                    unavailableDestinationIds.includes(
+                      stop.destination_id,
+                    );
+
+                  return (
+                    <label
+                      key={stop.id}
+                      className={`itinerary-replan-stop ${
+                        selected
+                          ? "itinerary-replan-stop-selected"
+                          : ""
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() =>
+                          toggleUnavailableDestination(
+                            stop.destination_id,
+                          )
+                        }
+                        disabled={
+                          replanMutation.isPending
+                        }
+                      />
+
+                      <span className="itinerary-replan-stop-number">
+                        {stop.sequence}
+                      </span>
+
+                      <span className="itinerary-replan-stop-info">
+                        <strong>
+                          {destination?.name ??
+                            `Destination ${stop.destination_id}`}
+                        </strong>
+
+                        <small>
+                          {formatTime(
+                            stop.planned_arrival,
+                          )}
+
+                          {" · "}
+
+                          {formatDuration(
+                            stop.visit_duration_minutes,
+                          )}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <label className="itinerary-replan-reason">
+                <span>
+                  Reason{" "}
+                  <small>
+                    (optional)
+                  </small>
+                </span>
+
+                <textarea
+                  value={replanReason}
+                  maxLength={500}
+                  rows={3}
+                  disabled={
+                    replanMutation.isPending
+                  }
+                  onChange={(event) =>
+                    setReplanReason(
+                      event.target.value,
+                    )
+                  }
+                  placeholder="e.g. Destination closed unexpectedly"
+                />
+
+                <small>
+                  {replanReason.length}/500
+                </small>
+              </label>
+
+              {replanMutation.isError && (
+                <div
+                  className="itinerary-replan-error"
+                  role="alert"
+                >
+                  {getErrorMessage(
+                    replanMutation.error,
+                  )}
+                </div>
+              )}
+
+              <div className="itinerary-replan-actions">
+                <button
+                  type="button"
+                  className="itinerary-secondary-button"
+                  onClick={
+                    handleCancelReplan
+                  }
+                  disabled={
+                    replanMutation.isPending
+                  }
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  className="itinerary-primary-button"
+                  onClick={() =>
+                    void handleReplan()
+                  }
+                  disabled={
+                    unavailableDestinationIds.length ===
+                      0 ||
+                    replanMutation.isPending
+                  }
+                >
+                  {replanMutation.isPending
+                    ? "Replanning..."
+                    : "Create new itinerary"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="itinerary-plan-section">
           <div className="itinerary-section-heading">
@@ -463,11 +760,13 @@ export default function ItineraryPage() {
             !areStopsError &&
             stops.length === 0 && (
               <div className="itinerary-state">
-                <h3>No stops yet</h3>
+                <h3>
+                  No stops yet
+                </h3>
 
                 <p>
-                  This itinerary doesn't contain
-                  any planned stops.
+                  This itinerary doesn't
+                  contain any planned stops.
                 </p>
               </div>
             )}
@@ -534,9 +833,7 @@ export default function ItineraryPage() {
 
                               {destination && (
                                 <p className="itinerary-stop-location">
-                                  {
-                                    destination.location
-                                  }
+                                  {destination.location}
                                 </p>
                               )}
                             </div>
@@ -645,7 +942,9 @@ export default function ItineraryPage() {
                             <Link
                               to={`/destinations/${destination.slug}`}
                               className="itinerary-destination-link"
-                              onClick={(event) =>
+                              onClick={(
+                                event,
+                              ) =>
                                 event.stopPropagation()
                               }
                             >

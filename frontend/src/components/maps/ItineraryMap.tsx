@@ -45,7 +45,6 @@ function createMarkerElement(
     document.createElement("button");
 
   element.type = "button";
-
   element.className =
     "itinerary-map-marker";
 
@@ -111,7 +110,8 @@ export default function ItineraryMap({
       MAPBOX_TOKEN;
 
     const map = new mapboxgl.Map({
-      container: containerRef.current,
+      container:
+        containerRef.current,
       style:
         "mapbox://styles/mapbox/streets-v12",
       center: [80.2707, 13.0827],
@@ -123,20 +123,23 @@ export default function ItineraryMap({
       "top-right",
     );
 
+    const markers =
+        markersRef.current;
+
     mapRef.current = map;
 
     return () => {
-      markersRef.current.forEach(
-        (marker) => {
-          marker.remove();
-        },
-      );
+        markers.forEach(
+            (marker) => {
+                marker.remove();
+            },
+        );
 
-      markersRef.current.clear();
+        markers.clear();
 
-      map.remove();
+        map.remove();
 
-      mapRef.current = null;
+        mapRef.current = null;
     };
   }, []);
 
@@ -151,13 +154,16 @@ export default function ItineraryMap({
     }
 
     const renderMarkers = () => {
-      markersRef.current.forEach(
+      const markers =
+        markersRef.current;
+
+      markers.forEach(
         (marker) => {
           marker.remove();
         },
       );
 
-      markersRef.current.clear();
+      markers.clear();
 
       if (stops.length === 0) {
         return;
@@ -188,10 +194,12 @@ export default function ItineraryMap({
           new mapboxgl.Marker({
             element,
           })
-            .setLngLat(stop.coordinates)
+            .setLngLat(
+              stop.coordinates,
+            )
             .addTo(map);
 
-        markersRef.current.set(
+        markers.set(
           stop.id,
           marker,
         );
@@ -203,7 +211,8 @@ export default function ItineraryMap({
 
       if (stops.length === 1) {
         map.flyTo({
-          center: stops[0].coordinates,
+          center:
+            stops[0].coordinates,
           zoom: 13,
           duration: 500,
         });
@@ -231,7 +240,10 @@ export default function ItineraryMap({
         renderMarkers,
       );
     };
-  }, [stops]);
+  }, [
+    stops,
+    selectedStopId,
+  ]);
 
   /*
    * Highlight selected marker and
@@ -244,7 +256,10 @@ export default function ItineraryMap({
       return;
     }
 
-    markersRef.current.forEach(
+    const markers =
+      markersRef.current;
+
+    markers.forEach(
       (marker, stopId) => {
         const element =
           marker.getElement();
@@ -458,13 +473,10 @@ export default function ItineraryMap({
         </h3>
 
         <p>
-          Add
-          {" "}
-          VITE_MAPBOX_PUBLIC_TOKEN
-          {" "}
-          to the frontend
-          environment to enable
-          the itinerary map.
+          Add{" "}
+          VITE_MAPBOX_PUBLIC_TOKEN{" "}
+          to the frontend environment
+          to enable the itinerary map.
         </p>
       </div>
     );
