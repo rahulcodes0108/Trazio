@@ -1,4 +1,10 @@
-import { useMemo } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
 import {
   Link,
   useParams,
@@ -8,10 +14,17 @@ import {
   useItinerary,
   useItineraryStops,
 } from "../../hooks/useItineraries";
+
 import { useDestinations } from "../../hooks/useDestinations";
+
 import {
   useLocationTracker,
 } from "../../hooks/useLocationTracker";
+
+import {
+  evaluateTripContext,
+  type LocationContextStatus,
+} from "../../lib/location/tripContext";
 
 function formatDuration(
   minutes: number,
@@ -54,6 +67,80 @@ function parseItineraryId(
     parsed > 0
     ? parsed
     : null;
+}
+
+interface Coordinates {
+  latitude: number;
+  longitude: number;
+}
+
+function parsePointCoordinates(
+  value: string,
+): Coordinates | null {
+  const match = value.match(
+    /POINT\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)/i,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const longitude =
+    Number(match[1]);
+
+  const latitude =
+    Number(match[2]);
+
+  if (
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(longitude)
+  ) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+  };
+}
+
+function formatContextStatus(
+  status: LocationContextStatus,
+): string {
+  switch (status) {
+    case "approaching":
+      return "Approaching your current stop";
+
+    case "arrived":
+      return "You have arrived";
+
+    case "departed":
+      return "You have departed this stop";
+
+    case "missed":
+      return "This stop may have been missed";
+
+    case "delayed":
+      return "You are running behind schedule";
+
+    case "no_stop":
+      return "No active stop";
+
+    default:
+      return "Trip context unavailable";
+  }
+}
+
+function formatDistance(
+  meters: number,
+): string {
+  if (meters < 1_000) {
+    return `${Math.round(meters)} m`;
+  }
+
+  return `${(
+    meters / 1_000
+  ).toFixed(1)} km`;
 }
 
 export default function ActiveTripPage() {
@@ -138,6 +225,169 @@ export default function ActiveTripPage() {
           nextStop.destination_id,
         )
       : null;
+
+  const previousContextStatusRef =
+    useRef<LocationContextStatus>(
+      "approaching",
+    );
+
+  const [
+    contextStatus,
+    setContextStatus,
+  ] = useState<LocationContextStatus>(
+    "no_stop",
+  );
+
+  const [
+    distanceToCurrentStopMeters,
+    setDistanceToCurrentStopMeters,
+  ] = useState<number | null>(
+    null,
+  );
+
+  const [
+    distanceToNextStopMeters,
+    setDistanceToNextStopMeters,
+  ] = useState<number | null>(
+    null,
+  );
+
+  const currentStopCoordinates =
+    useMemo(() => {
+      if (!currentDestination) {
+        return null;
+      }
+
+      return parsePointCoordinates(
+        currentDestination.location,
+      );
+    }, [
+      currentDestination,
+    ]);
+
+  const nextStopCoordinates =
+    useMemo(() => {
+      if (!nextDestination) {
+        return null;
+      }
+
+      return parsePointCoordinates(
+        nextDestination.location,
+      );
+    }, [
+      nextDestination,
+    ]);
+
+  useEffect(() => {
+    if (!currentStop) {
+      previousContextStatusRef.current =
+        "no_stop";
+
+      setContextStatus("no_stop");
+      setDistanceToCurrentStopMeters(
+        null,
+      );
+      setDistanceToNextStopMeters(
+        null,
+      );
+
+      return;
+    }
+
+    /*
+     * We cannot evaluate proximity until
+     * the destination coordinates are available.
+     */
+    if (!currentStopCoordinates) {
+      setContextStatus("no_stop");
+      setDistanceToCurrentStopMeters(
+        null,
+      );
+      setDistanceToNextStopMeters(
+        null,
+      );
+
+      return;
+    }
+
+    /*
+     * Context evaluation requires a GPS
+     * location. Until then, preserve the
+     * current context state.
+     */
+    if (!location) {
+      return;
+    }
+
+    const result =
+      evaluateTripContext({
+        location: {
+          latitude:
+            location.latitude,
+          longitude:
+            location.longitude,
+        },
+
+        timestamp:
+          location.timestamp,
+
+        currentStop: {
+          id: currentStop.id,
+          destinationId:
+            currentStop.destination_id,
+          sequence:
+            currentStop.sequence,
+          coordinates:
+            currentStopCoordinates,
+          plannedArrival:
+            currentStop.planned_arrival,
+          plannedDeparture:
+            currentStop.planned_departure,
+        },
+
+        nextStop:
+          nextStop &&
+          nextStopCoordinates
+            ? {
+                id: nextStop.id,
+                destinationId:
+                  nextStop.destination_id,
+                sequence:
+                  nextStop.sequence,
+                coordinates:
+                  nextStopCoordinates,
+                plannedArrival:
+                  nextStop.planned_arrival,
+                plannedDeparture:
+                  nextStop.planned_departure,
+              }
+            : null,
+
+        previousStatus:
+          previousContextStatusRef.current,
+      });
+
+    setContextStatus(
+      result.status,
+    );
+
+    setDistanceToCurrentStopMeters(
+      result.distanceToCurrentStopMeters,
+    );
+
+    setDistanceToNextStopMeters(
+      result.distanceToNextStopMeters,
+    );
+
+    previousContextStatusRef.current =
+      result.status;
+  }, [
+    location,
+    currentStop,
+    nextStop,
+    currentStopCoordinates,
+    nextStopCoordinates,
+  ]);
 
   if (
     !parsedItineraryId ||
@@ -267,7 +517,7 @@ export default function ActiveTripPage() {
         </div>
 
         {locationStatus ===
-          "tracking" ? (
+        "tracking" ? (
           <button
             type="button"
             className="active-trip-secondary-button"
@@ -347,8 +597,7 @@ export default function ActiveTripPage() {
                 )}
               </p>
 
-              {currentStop
-                .notes && (
+              {currentStop.notes && (
                 <p className="active-trip-card-description">
                   {currentStop.notes}
                 </p>
@@ -375,6 +624,71 @@ export default function ActiveTripPage() {
             </p>
           )}
         </article>
+      </section>
+
+      <section className="active-trip-context-card">
+        <div>
+          <p className="active-trip-card-label">
+            TRIP CONTEXT
+          </p>
+
+          <h2>
+            {formatContextStatus(
+              contextStatus,
+            )}
+          </h2>
+
+          <p className="active-trip-card-meta">
+            {contextStatus ===
+            "arrived"
+              ? "Your current location is within the arrival area."
+              : contextStatus ===
+                  "missed"
+                ? "The planned arrival window has passed."
+                : contextStatus ===
+                    "departed"
+                  ? "You have moved beyond the departure area."
+                  : contextStatus ===
+                      "approaching"
+                    ? "Trazio is monitoring your distance to the current stop."
+                    : contextStatus ===
+                        "no_stop"
+                      ? "There is no active destination to evaluate."
+                      : "Trazio is evaluating your trip timing."}
+          </p>
+        </div>
+
+        <div className="active-trip-context-metrics">
+          {distanceToCurrentStopMeters !==
+            null && (
+            <div>
+              <span>
+                Current stop
+              </span>
+
+              <strong>
+                {formatDistance(
+                  distanceToCurrentStopMeters,
+                )}
+              </strong>
+            </div>
+          )}
+
+          {distanceToNextStopMeters !==
+            null && (
+            <div>
+              <span>
+                Next stop
+              </span>
+
+              <strong>
+                {formatDistance(
+                  distanceToNextStopMeters,
+                )}
+              </strong>
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="active-trip-location-card">
@@ -464,10 +778,9 @@ export default function ActiveTripPage() {
         </div>
 
         <p className="active-trip-card-meta">
-          Active-trip progress
-          tracking will become
-          location-aware in the next
-          slice.
+          Active-trip progress is now
+          location-aware through the
+          trip context engine.
         </p>
       </section>
     </main>

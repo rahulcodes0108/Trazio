@@ -2530,3 +2530,55 @@
     width: 100%;
   }
 }
+
+.active-trip-context-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 1rem;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.active-trip-context-card h2 {
+  margin: 0.35rem 0 0;
+}
+
+.active-trip-context-metrics {
+  display: flex;
+  gap: 2rem;
+  flex-shrink: 0;
+}
+
+.active-trip-context-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.active-trip-context-metrics span {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.65;
+}
+
+.active-trip-context-metrics strong {
+  font-size: 1.1rem;
+}
+
+@media (max-width: 700px) {
+  .active-trip-context-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .active-trip-context-metrics {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

@@ -7,172 +7,133 @@ import {
 
 import {
   LocationTracker,
-  type LocationTrackerOptions,
+  type LocationTrackerStatus,
   type UserLocation,
 } from "../components/location/LocationTracker";
 
-type LocationStatus =
-  | "idle"
-  | "tracking"
-  | "unsupported"
-  | "permission_denied"
-  | "error";
-
-interface UseLocationTrackerResult {
-  status: LocationStatus;
+export interface LocationTrackerState {
   location: UserLocation | null;
+  status: LocationTrackerStatus;
   error: string | null;
-  startTracking: () => void;
-  stopTracking: () => void;
 }
 
 function getGeolocationErrorMessage(
   error: GeolocationPositionError,
-): {
-  status:
-    | "permission_denied"
-    | "error";
-  message: string;
-} {
-  if (
-    error.code ===
-    GeolocationPositionError.PERMISSION_DENIED
-  ) {
-    return {
-      status: "permission_denied",
-      message:
-        "Location permission was denied. Allow location access in your browser to track your trip.",
-    };
-  }
+): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return "Location permission was denied.";
 
-  if (
-    error.code ===
-    GeolocationPositionError.POSITION_UNAVAILABLE
-  ) {
-    return {
-      status: "error",
-      message:
-        "Your current location is temporarily unavailable.",
-    };
-  }
+    case error.POSITION_UNAVAILABLE:
+      return "Your current location is unavailable.";
 
-  if (
-    error.code ===
-    GeolocationPositionError.TIMEOUT
-  ) {
-    return {
-      status: "error",
-      message:
-        "Location detection timed out. We will keep trying.",
-    };
-  }
+    case error.TIMEOUT:
+      return "Location request timed out.";
 
-  return {
-    status: "error",
-    message:
-      "Unable to determine your current location.",
-  };
+    default:
+      return "Unable to determine your location.";
+  }
 }
 
-export function useLocationTracker(
-  options?: LocationTrackerOptions,
-): UseLocationTrackerResult {
-  const [status, setStatus] =
-    useState<LocationStatus>("idle");
-
-  const [location, setLocation] =
-    useState<UserLocation | null>(
-      null,
-    );
-
-  const [error, setError] =
-    useState<string | null>(null);
-
+export function useLocationTracker() {
   const trackerRef =
-    useRef<LocationTracker | null>(
-      null,
-    );
+    useRef<LocationTracker | null>(null);
+
+  const [state, setState] =
+    useState<LocationTrackerState>({
+      location: null,
+      status: "idle",
+      error: null,
+    });
 
   useEffect(() => {
-    const tracker =
-      new LocationTracker(
-        (nextLocation: UserLocation) => {
-          setLocation(nextLocation);
-          setError(null);
-          setStatus("tracking");
-        },
-        (
-          trackerError: GeolocationPositionError,
-        ) => {
-          const result =
-            getGeolocationErrorMessage(
-              trackerError,
-            );
+    const tracker = new LocationTracker(
+      (location) => {
+        setState((previous) => ({
+          ...previous,
+          location,
+          status: "tracking",
+          error: null,
+        }));
+      },
 
-          setStatus(result.status);
-          setError(result.message);
-        },
-        options,
-      );
+      (error) => {
+        const message =
+          getGeolocationErrorMessage(error);
+
+        const status: LocationTrackerStatus =
+          error.code ===
+          error.PERMISSION_DENIED
+            ? "permission_denied"
+            : "error";
+
+        setState((previous) => ({
+          ...previous,
+          status,
+          error: message,
+        }));
+      },
+    );
 
     trackerRef.current = tracker;
 
     if (!tracker.isSupported()) {
-      setStatus("unsupported");
+      setState((previous) => ({
+        ...previous,
+        status: "unsupported",
+        error:
+          "Geolocation is not supported by this browser.",
+      }));
     }
 
     return () => {
       tracker.stop();
       trackerRef.current = null;
     };
-  }, [options]);
+  }, []);
 
-  const startTracking =
-    useCallback(() => {
-      const tracker =
-        trackerRef.current;
+  const startTracking = useCallback(() => {
+    const tracker = trackerRef.current;
 
-      if (!tracker) {
-        return;
-      }
+    if (!tracker) {
+      return;
+    }
 
-      if (!tracker.isSupported()) {
-        setStatus("unsupported");
-        setError(
-          "Location tracking is not supported by this browser.",
-        );
-        return;
-      }
+    if (!tracker.isSupported()) {
+      setState((previous) => ({
+        ...previous,
+        status: "unsupported",
+        error:
+          "Geolocation is not supported by this browser.",
+      }));
 
-      setError(null);
+      return;
+    }
 
-      const started =
-        tracker.start();
+    const started = tracker.start();
 
-      if (started) {
-        setStatus("tracking");
-      }
-    }, []);
+    if (started) {
+      setState((previous) => ({
+        ...previous,
+        status: "tracking",
+        error: null,
+      }));
+    }
+  }, []);
 
-  const stopTracking =
-    useCallback(() => {
-      const tracker =
-        trackerRef.current;
+  const stopTracking = useCallback(() => {
+    trackerRef.current?.stop();
 
-      if (!tracker) {
-        return;
-      }
-
-      tracker.stop();
-
-      setStatus("idle");
-      setError(null);
-    }, []);
+    setState((previous) => ({
+      ...previous,
+      status: "idle",
+    }));
+  }, []);
 
   return {
-    status,
-    location,
-    error,
+    location: state.location,
+    status: state.status,
+    error: state.error,
     startTracking,
     stopTracking,
   };
