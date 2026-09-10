@@ -22,6 +22,7 @@ import DestinationsPage from "./pages/destinations/DestinationsPage";
 import DestinationDetailPage from "./pages/destinations/DestinationDetailPage";
 
 import ItineraryPage from "./pages/itineraries/ItineraryPage";
+import ActiveTripPage from "./pages/trips/ActiveTripPage";
 
 function App() {
   useRestoreSession();
@@ -77,6 +78,15 @@ function App() {
           <Route
             path="/destinations"
             element={<DestinationsPage />}
+          />
+          <Route
+            path="/trips/:tripId/itineraries/:itineraryId"
+            element={<ItineraryPage />}
+          />
+
+          <Route
+            path="/trips/:tripId/itineraries/:itineraryId/active"
+            element={<ActiveTripPage />}
           />
 
           <Route
